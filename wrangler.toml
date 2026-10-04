@@ -5,14 +5,3 @@ compatibility_flags = ["nodejs_compat"]
 
 [observability]
 enabled = true
-
-# ============================================================
-# W6 = Frontend API Worker
-# Trigger: HTTP only
-# Queue: NONE
-# Cron: NONE
-# ============================================================
-
-# Secrets (set in Cloudflare Dashboard → Settings → Variables):
-#   SUPABASE_URL
-#   SUPABASE_SERVICE_ROLE_KEY
