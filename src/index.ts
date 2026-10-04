@@ -1,9 +1,3 @@
-
----
-
-## 📄 File 6: `src/index.ts`
-
-```typescript
 // W6 — Frontend API Worker
 // This is a placeholder. Full router will be added in Phase 7.
 
