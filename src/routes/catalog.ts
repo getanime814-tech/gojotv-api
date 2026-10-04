@@ -2,13 +2,16 @@
 // Filters: genre, year, season, status, format, sort, page, per_page
 
 import { createSupabaseClient, SupabaseEnv } from "../services/supabase";
-import { jsonOk, serverError } from "../utils/response";
+import { jsonOk, serverError, extractErrorMessage } from "../utils/response";
 import { getCorsHeaders } from "../utils/cors";
 import { sanitizePage, sanitizePerPage } from "../utils/validation";
 import type { AnimeCard } from "../types/api";
 import type { AnimeRow } from "../types/database";
 
-interface Env extends SupabaseEnv {}
+type Env = SupabaseEnv;
+
+const SELECT_COLS =
+  "id, slug, title, english_title, romaji_title, poster_image, cover_color, score, year, status, is_movie, episodes_count, popularity, trending_score, created_at";
 
 function toAnimeCard(row: AnimeRow): AnimeCard {
   return {
@@ -47,51 +50,44 @@ export async function handleCatalog(
 
     let query = supabase
       .from("anime")
-      .select(
-        "id, slug, title, english_title, romaji_title, poster_image, cover_color, score, year, status, is_movie, episodes_count, popularity, trending_score, created_at",
-        { count: "exact" }
-      )
+      .select(SELECT_COLS)
       .is("deleted_at", null);
 
     if (genre) {
-      const { data: genreRow } = await supabase
+      const { data: genreRow, error: genreErr } = await supabase
         .from("genres")
         .select("id")
         .eq("name", genre)
         .maybeSingle();
 
+      if (genreErr) throw genreErr;
+
       if (!genreRow) {
         return jsonOk(
           {
             items: [],
-            pagination: {
-              page,
-              per_page: perPage,
-              total: 0,
-              total_pages: 0,
-            },
+            pagination: { page, per_page: perPage, total: 0, total_pages: 0 },
           },
           { headers: corsHeaders }
         );
       }
 
-      const { data: animeIds } = await supabase
+      const { data: animeIds, error: agErr } = await supabase
         .from("anime_genres")
         .select("anime_id")
         .eq("genre_id", genreRow.id);
 
-      const ids = (animeIds ?? []).map((r) => r.anime_id);
+      if (agErr) throw agErr;
+
+      const ids = ((animeIds ?? []) as Array<{ anime_id: string }>).map(
+        (r) => r.anime_id
+      );
 
       if (ids.length === 0) {
         return jsonOk(
           {
             items: [],
-            pagination: {
-              page,
-              per_page: perPage,
-              total: 0,
-              total_pages: 0,
-            },
+            pagination: { page, per_page: perPage, total: 0, total_pages: 0 },
           },
           { headers: corsHeaders }
         );
@@ -136,13 +132,15 @@ export async function handleCatalog(
 
     const from = (page - 1) * perPage;
     const to = from + perPage - 1;
-    query = query.range(from, to);
+    const { data, error } = await query.range(from, to);
 
-    const { data, error, count } = await query;
     if (error) throw error;
 
     const items = ((data ?? []) as AnimeRow[]).map(toAnimeCard);
-    const total = count ?? 0;
+
+    // Estimate total_pages: if we got a full page, assume more may exist
+    const hasMore = items.length === perPage;
+    const totalPagesEstimate = hasMore ? page + 1 : page;
 
     return jsonOk(
       {
@@ -150,14 +148,13 @@ export async function handleCatalog(
         pagination: {
           page,
           per_page: perPage,
-          total,
-          total_pages: Math.ceil(total / perPage),
+          total: items.length,
+          total_pages: totalPagesEstimate,
         },
       },
       { headers: corsHeaders }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return serverError(message);
+    return serverError(extractErrorMessage(err));
   }
 }
