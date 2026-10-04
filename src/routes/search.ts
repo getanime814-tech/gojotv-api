@@ -4,15 +4,27 @@
 // If 0 results → log to search_requests (W5 will discover)
 
 import { createSupabaseClient, SupabaseEnv } from "../services/supabase";
-import { jsonOk, serverError } from "../utils/response";
+import { jsonOk, serverError, extractErrorMessage } from "../utils/response";
 import { getCorsHeaders } from "../utils/cors";
 import { parseSearchQuery } from "../utils/validation";
 import type { SearchResultItem, SearchResponse } from "../types/api";
 
-interface Env extends SupabaseEnv {}
+type Env = SupabaseEnv;
 
 const MAX_RESULTS = 10;
 const MIN_QUERY_LENGTH = 3;
+const SELECT_COLS =
+  "id, slug, title, english_title, romaji_title, poster_image, popularity";
+
+interface SearchRow {
+  id: string;
+  slug: string;
+  title: string;
+  english_title: string | null;
+  romaji_title: string | null;
+  poster_image: string | null;
+  popularity: number | null;
+}
 
 export async function handleSearch(
   request: Request,
@@ -30,31 +42,57 @@ export async function handleSearch(
 
   try {
     const supabase = createSupabaseClient(env);
-    const safeQuery = query.replace(/[%_]/g, "");
+    const safeQuery = query.replace(/[%_\\]/g, "");
     const pattern = `${safeQuery}%`;
 
-    const { data, error } = await supabase
-      .from("anime")
-      .select(
-        "id, slug, title, english_title, romaji_title, poster_image, popularity"
-      )
-      .is("deleted_at", null)
-      .or(
-        `title.ilike.${pattern},english_title.ilike.${pattern},romaji_title.ilike.${pattern}`
-      )
-      .order("popularity", { ascending: false, nullsFirst: false })
-      .limit(MAX_RESULTS);
+    const [titleRes, engRes, romajiRes] = await Promise.all([
+      supabase
+        .from("anime")
+        .select(SELECT_COLS)
+        .is("deleted_at", null)
+        .ilike("title", pattern)
+        .order("popularity", { ascending: false, nullsFirst: false })
+        .limit(MAX_RESULTS),
+      supabase
+        .from("anime")
+        .select(SELECT_COLS)
+        .is("deleted_at", null)
+        .ilike("english_title", pattern)
+        .order("popularity", { ascending: false, nullsFirst: false })
+        .limit(MAX_RESULTS),
+      supabase
+        .from("anime")
+        .select(SELECT_COLS)
+        .is("deleted_at", null)
+        .ilike("romaji_title", pattern)
+        .order("popularity", { ascending: false, nullsFirst: false })
+        .limit(MAX_RESULTS),
+    ]);
 
-    if (error) throw error;
+    const firstError = titleRes.error || engRes.error || romajiRes.error;
+    if (firstError) throw firstError;
 
-    const results: SearchResultItem[] = (data ?? []).map((row) => ({
-      id: row.id,
-      slug: row.slug,
-      title: row.title,
-      english_title: row.english_title,
-      romaji_title: row.romaji_title,
-      poster_image: row.poster_image,
-    }));
+    const map = new Map<string, SearchRow>();
+    for (const res of [titleRes, engRes, romajiRes]) {
+      for (const row of (res.data ?? []) as SearchRow[]) {
+        if (!map.has(row.id)) map.set(row.id, row);
+      }
+    }
+
+    const merged = Array.from(map.values()).sort(
+      (a, b) => (b.popularity ?? 0) - (a.popularity ?? 0)
+    );
+
+    const results: SearchResultItem[] = merged
+      .slice(0, MAX_RESULTS)
+      .map((row) => ({
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        english_title: row.english_title,
+        romaji_title: row.romaji_title,
+        poster_image: row.poster_image,
+      }));
 
     if (results.length === 0) {
       await logMissingSearch(supabase, query);
@@ -63,8 +101,7 @@ export async function handleSearch(
     const response: SearchResponse = { results, query };
     return jsonOk(response, { headers: corsHeaders });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return serverError(message);
+    return serverError(extractErrorMessage(err));
   }
 }
 
@@ -95,6 +132,6 @@ async function logMissingSearch(
       });
     }
   } catch {
-    // Silent fail — logging should not break search
+    // silent fail
   }
 }
