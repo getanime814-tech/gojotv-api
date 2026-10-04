@@ -2,11 +2,11 @@
 // Returns list of published static pages (for header menu)
 
 import { createSupabaseClient, SupabaseEnv } from "../services/supabase";
-import { jsonOk, serverError } from "../utils/response";
+import { jsonOk, serverError, extractErrorMessage } from "../utils/response";
 import { getCorsHeaders } from "../utils/cors";
 import type { MenuResponse } from "../types/api";
 
-interface Env extends SupabaseEnv {}
+type Env = SupabaseEnv;
 
 export async function handleMenu(
   request: Request,
@@ -27,7 +27,6 @@ export async function handleMenu(
     const response: MenuResponse = { items: data ?? [] };
     return jsonOk(response, { headers: corsHeaders });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return serverError(message);
+    return serverError(extractErrorMessage(err));
   }
 }
